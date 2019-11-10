@@ -21,37 +21,18 @@
 #import "CDVAccelerometer.h"
 
 @interface CDVAccelerometer () {}
-@property (readwrite, assign) BOOL isRunning;
-@property (readwrite, assign) BOOL haveReturnedResult;
 @property (readwrite, strong) CMMotionManager* motionManager;
-@property (readwrite, assign) double x;
-@property (readwrite, assign) double y;
-@property (readwrite, assign) double z;
-@property (readwrite, assign) NSTimeInterval timestamp;
 @end
 
 @implementation CDVAccelerometer
 
-@synthesize callbackId, isRunning,x,y,z,timestamp;
 
-// defaults to 10 msec
-#define kAccelerometerInterval 10
 // g constant: -9.81 m/s^2
 #define kGravitationalConstant -9.81
 
 - (CDVAccelerometer*)init
 {
     self = [super init];
-    if (self) {
-        self.x = 0;
-        self.y = 0;
-        self.z = 0;
-        self.timestamp = 0;
-        self.callbackId = nil;
-        self.isRunning = NO;
-        self.haveReturnedResult = YES;
-        self.motionManager = nil;
-    }
     return self;
 }
 
@@ -62,38 +43,49 @@
 
 - (void)start:(CDVInvokedUrlCommand*)command
 {
-    self.haveReturnedResult = NO;
-    self.callbackId = command.callbackId;
-
-    if (!self.motionManager)
-    {
-        self.motionManager = [[CMMotionManager alloc] init];
-    }
-
-    if ([self.motionManager isAccelerometerAvailable] == YES) {
-        // Assign the update interval to the motion manager and start updates
-        [self.motionManager setAccelerometerUpdateInterval:kAccelerometerInterval/1000];  // expected in seconds
-        __weak CDVAccelerometer* weakSelf = self;
-        [self.motionManager startAccelerometerUpdatesToQueue:[NSOperationQueue mainQueue] withHandler:^(CMAccelerometerData *accelerometerData, NSError *error) {
-            weakSelf.x = accelerometerData.acceleration.x;
-            weakSelf.y = accelerometerData.acceleration.y;
-            weakSelf.z = accelerometerData.acceleration.z;
-            weakSelf.timestamp = ([[NSDate date] timeIntervalSince1970] * 1000);
-            [weakSelf returnAccelInfo];
-        }];
-
-        if (!self.isRunning) {
-            self.isRunning = YES;
+    @try {
+        if (!self.motionManager)
+        {
+            self.motionManager = [[CMMotionManager alloc] init];
         }
-    }
-    else {
 
-        NSLog(@"Running in Simulator? All gyro tests will fail.");
-        CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_INVALID_ACTION messageAsString:@"Error. Accelerometer Not Available."];
-        
-        [self.commandDelegate sendPluginResult:result callbackId:self.callbackId];
-    }
-    
+        if ([self.motionManager isAccelerometerAvailable]) {
+            // If we're already running, stop, then start again to set the new interval.
+            if (self.motionManager.isAccelerometerActive) {
+                [self stop:nil];
+            }
+
+            // Assign the update interval to the motion manager and start updates
+            float intervalMs = [[command.arguments objectAtIndex:0] floatValue];
+            [self.motionManager setAccelerometerUpdateInterval:intervalMs/1000]; // expected in seconds
+
+            [self.motionManager startAccelerometerUpdatesToQueue:[NSOperationQueue mainQueue] withHandler:^(CMAccelerometerData *accelerometerData, NSError *error) {
+
+                // Create an acceleration object
+                NSMutableDictionary* accelProps = [NSMutableDictionary dictionaryWithCapacity:4];
+                accelProps[@"x"] = [NSNumber numberWithDouble:accelerometerData.acceleration.x * kGravitationalConstant];
+                accelProps[@"y"] = [NSNumber numberWithDouble:accelerometerData.acceleration.y * kGravitationalConstant];
+                accelProps[@"z"] = [NSNumber numberWithDouble:accelerometerData.acceleration.z * kGravitationalConstant];
+                accelProps[@"timestamp"] = [NSNumber numberWithDouble:([[NSDate date] timeIntervalSince1970] * 1000)];
+
+                CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:accelProps];
+                [result setKeepCallbackAsBool:YES];
+                [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+            }];
+        }
+        else {
+
+            NSLog(@"Running in Simulator? All gyro tests will fail.");
+            CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_INVALID_ACTION messageAsString:@"Error. Accelerometer Not Available."];
+
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+        }
+    } @catch (NSException *exception) {
+       NSLog(@"CDVAccelerometer-start ERROR: %@", exception.reason);
+
+       CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:exception.reason];
+       [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+   }
 }
 
 - (void)onReset
@@ -103,47 +95,23 @@
 
 - (void)stop:(CDVInvokedUrlCommand*)command
 {
-    if ([self.motionManager isAccelerometerAvailable] == YES) {
-        if (self.haveReturnedResult == NO){
-            // block has not fired before stop was called, return whatever result we currently have
-            [self returnAccelInfo];
+    @try {
+        if (self.motionManager && self.motionManager.isAccelerometerActive) {
+            [self.motionManager stopAccelerometerUpdates];
         }
-        [self.motionManager stopAccelerometerUpdates];
+
+        if (command) {
+            CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"CDVAccelerometer-stop ERROR: %@", exception.reason);
+
+        if (command) {
+            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:exception.reason];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        }
     }
-    self.isRunning = NO;
 }
 
-- (void)returnAccelInfo
-{
-    // Create an acceleration object
-    NSMutableDictionary* accelProps = [NSMutableDictionary dictionaryWithCapacity:4];
-
-    [accelProps setValue:[NSNumber numberWithDouble:self.x * kGravitationalConstant] forKey:@"x"];
-    [accelProps setValue:[NSNumber numberWithDouble:self.y * kGravitationalConstant] forKey:@"y"];
-    [accelProps setValue:[NSNumber numberWithDouble:self.z * kGravitationalConstant] forKey:@"z"];
-    [accelProps setValue:[NSNumber numberWithDouble:self.timestamp] forKey:@"timestamp"];
-
-    CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:accelProps];
-    [result setKeepCallback:[NSNumber numberWithBool:YES]];
-    [self.commandDelegate sendPluginResult:result callbackId:self.callbackId];
-    self.haveReturnedResult = YES;
-}
-
-// TODO: Consider using filtering to isolate instantaneous data vs. gravity data -jm
-
-/*
- #define kFilteringFactor 0.1
-
- // Use a basic low-pass filter to keep only the gravity component of each axis.
- grav_accelX = (acceleration.x * kFilteringFactor) + ( grav_accelX * (1.0 - kFilteringFactor));
- grav_accelY = (acceleration.y * kFilteringFactor) + ( grav_accelY * (1.0 - kFilteringFactor));
- grav_accelZ = (acceleration.z * kFilteringFactor) + ( grav_accelZ * (1.0 - kFilteringFactor));
-
- // Subtract the low-pass value from the current value to get a simplified high-pass filter
- instant_accelX = acceleration.x - ( (acceleration.x * kFilteringFactor) + (instant_accelX * (1.0 - kFilteringFactor)) );
- instant_accelY = acceleration.y - ( (acceleration.y * kFilteringFactor) + (instant_accelY * (1.0 - kFilteringFactor)) );
- instant_accelZ = acceleration.z - ( (acceleration.z * kFilteringFactor) + (instant_accelZ * (1.0 - kFilteringFactor)) );
-
-
- */
 @end

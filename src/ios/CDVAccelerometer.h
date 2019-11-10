@@ -22,14 +22,8 @@
 
 @interface CDVAccelerometer : CDVPlugin
 {
-    double x;
-    double y;
-    double z;
-    NSTimeInterval timestamp;
-}
 
-@property (readonly, assign) BOOL isRunning;
-@property (nonatomic, strong) NSString* callbackId;
+}
 
 - (CDVAccelerometer*)init;
 

@@ -23,115 +23,16 @@
  * This class provides access to device accelerometer data.
  * @constructor
  */
-var argscheck = require('cordova/argscheck'),
-    utils = require("cordova/utils"),
-    exec = require("cordova/exec"),
-    Acceleration = require('./Acceleration');
-
-// Is the accel sensor running?
-var running = false;
-
-// Keeps reference to watchAcceleration calls.
-var timers = {};
+var exec = require("cordova/exec");
 
 // Array of listeners; used to keep track of when we should call start and stop.
 var listeners = [];
 
-// Last returned acceleration object from native
-var accel = null;
-
-// Timer used when faking up devicemotion events
-var eventTimerId = null;
-
-// Tells native to start.
-function start() {
-    exec(function (a) {
-        var tempListeners = listeners.slice(0);
-        accel = new Acceleration(a.x, a.y, a.z, a.timestamp);
-        for (var i = 0, l = tempListeners.length; i < l; i++) {
-            tempListeners[i].win(accel);
-        }
-    }, function (e) {
-        var tempListeners = listeners.slice(0);
-        for (var i = 0, l = tempListeners.length; i < l; i++) {
-            tempListeners[i].fail(e);
-        }
-    }, "Accelerometer", "start", []);
-    running = true;
-}
-
-// Tells native to stop.
-function stop() {
-    exec(null, null, "Accelerometer", "stop", []);
-    accel = null;
-    running = false;
-}
-
-// Adds a callback pair to the listeners array
-function createCallbackPair(win, fail) {
-    return { win: win, fail: fail };
-}
-
-// Removes a win/fail listener pair from the listeners array
-function removeListeners(l) {
-    var idx = listeners.indexOf(l);
-    if (idx > -1) {
-        listeners.splice(idx, 1);
-        if (listeners.length === 0) {
-            stop();
-        }
-    }
-}
-
 var accelerometer = {
-    /**
-     * Asynchronously acquires the current acceleration.
-     *
-     * @param {Function} successCallback    The function to call when the acceleration data is available
-     * @param {Function} errorCallback      The function to call when there is an error getting the acceleration data. (OPTIONAL)
-     * @param {AccelerationOptions} options The options for getting the accelerometer data such as timeout. (OPTIONAL)
-     */
-    getCurrentAcceleration: function (successCallback, errorCallback, options) {
-        argscheck.checkArgs('fFO', 'accelerometer.getCurrentAcceleration', arguments);
-
-        if (cordova.platformId === "windowsphone") {
-            exec(function (a) {
-                accel = new Acceleration(a.x, a.y, a.z, a.timestamp);
-                successCallback(accel);
-            }, function (e) {
-                errorCallback(e);
-            }, "Accelerometer", "getCurrentAcceleration", []);
-
-            return;
-        }
-
-        if (cordova.platformId === "browser" && !eventTimerId) {
-            // fire devicemotion event once
-            var devicemotionEvent = new Event('devicemotion');
-            window.setTimeout(function() {
-                window.dispatchEvent(devicemotionEvent);
-            }, 200);
-        }
-
-        var p;
-        var win = function (a) {
-            removeListeners(p);
-            successCallback(a);
-        };
-        var fail = function (e) {
-            removeListeners(p);
-            if (errorCallback) {
-                errorCallback(e);
-            }
-        };
-
-        p = createCallbackPair(win, fail);
-        listeners.push(p);
-
-        if (!running) {
-            start();
-        }
-    },
+    x: 0,
+    y: 0,
+    z: 0,
+    timestamp: -1,
 
     /**
      * Asynchronously acquires the acceleration repeatedly at a given interval.
@@ -139,72 +40,49 @@ var accelerometer = {
      * @param {Function} successCallback    The function to call each time the acceleration data is available
      * @param {Function} errorCallback      The function to call when there is an error getting the acceleration data. (OPTIONAL)
      * @param {AccelerationOptions} options The options for getting the accelerometer data such as timeout. (OPTIONAL)
-     * @return String                       The watch id that must be passed to #clearWatch to stop watching.
+     * @return {Function} unregister        A function that can be called to unregister the success callback from getting called (OPTIONAL)
      */
     watchAcceleration: function (successCallback, errorCallback, options) {
-        argscheck.checkArgs('fFO', 'accelerometer.watchAcceleration', arguments);
-        // Default interval (10 sec)
-        var frequency = (options && options.frequency && typeof options.frequency == 'number') ? options.frequency : 10000;
-
-        // Keep reference to watch id, and report accel readings as often as defined in frequency
-        var id = utils.createUUID();
-
-        var p = createCallbackPair(function () { }, function (e) {
-            removeListeners(p);
-            if (errorCallback) {
-                errorCallback(e);
-            }
-        });
-        listeners.push(p);
-
-        timers[id] = {
-            timer: window.setInterval(function () {
-                if (accel) {
-                    successCallback(accel);
-                }
-            }, frequency),
-            listeners: p
+        // Default interval (60fps)
+        var frequency = (options && options.frequency && typeof options.frequency == 'number') ? options.frequency : 1000/60;
+    
+        var newListener = {
+            success: successCallback,
+            error: errorCallback,
         };
-
-        if (running) {
-            // If we're already running then immediately invoke the success callback
-            // but only if we have retrieved a value, sample code does not check for null ...
-            if (accel) {
-                successCallback(accel);
+        listeners.push(newListener);
+        
+        exec(function (accel) {
+            accelerometer.x = accel.x;
+            accelerometer.y = accel.y;
+            accelerometer.z = accel.z;
+            accelerometer.timestamp = accel.timestamp;
+            
+            for (var i = 0; i < listeners.length; i++) {
+                listeners[i].success(accel);
             }
-        } else {
-            start();
-        }
-
-        if (cordova.platformId === "browser" && !eventTimerId) {
-            // Start firing devicemotion events if we haven't already
-            var devicemotionEvent = new Event('devicemotion');
-            eventTimerId = window.setInterval(function() {
-                window.dispatchEvent(devicemotionEvent);
-            }, 200);
-        }
-
-        return id;
+        }, function (error) {
+            for (var i = 0; i < listeners.length; i++) {
+                if (listeners[i].error) {
+                    listeners[i].error(error);
+                }
+            }
+        }, "Accelerometer", "start", [frequency]);
+        
+        // Unregister function - If the last callback is unregistered, call the native "stop" method.
+        // The caller can optionally pass success/error callbacks to get any native errors from calling "stop".
+        return function(unregisterSuccessCallback, unregisterErrorCallback) {
+            var i = listeners.indexOf(newListener);
+            if (i !== -1) {
+                listeners.splice(i, 1);
+            }
+            
+            if (listeners.length === 0) {
+                exec(unregisterSuccessCallback, unregisterErrorCallback, "Accelerometer", "stop", []);
+            } else {
+                unregisterSuccessCallback();
+            }
+        };
     },
-
-    /**
-     * Clears the specified accelerometer watch.
-     *
-     * @param {String} id       The id of the watch returned from #watchAcceleration.
-     */
-    clearWatch: function (id) {
-        // Stop javascript timer & remove from timer list
-        if (id && timers[id]) {
-            window.clearInterval(timers[id].timer);
-            removeListeners(timers[id].listeners);
-            delete timers[id];
-
-            if (eventTimerId && Object.keys(timers).length === 0) {
-                // No more watchers, so stop firing 'devicemotion' events
-                window.clearInterval(eventTimerId);
-                eventTimerId = null;
-            }
-        }
-    }
 };
 module.exports = accelerometer;

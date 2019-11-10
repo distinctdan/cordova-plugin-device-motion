@@ -1,49 +1,29 @@
 {
-  "name": "cordova-plugin-device-motion",
-  "version": "2.0.2-dev",
-  "description": "[DEPRECATED] Cordova Device Motion Plugin",
+  "name": "cordova-plugin-device-motion2",
+  "version": "3.0.0",
+  "description": "Cordova Device Motion Plugin 2",
   "types": "./types/index.d.ts",
   "cordova": {
-    "id": "cordova-plugin-device-motion",
+    "id": "cordova-plugin-device-motion2",
     "platforms": [
-      "firefoxos",
       "android",
-      "amazon-fireos",
-      "ubuntu",
-      "ios",
-      "blackberry10",
-      "wp7",
-      "wp8",
-      "windows8",
-      "windows",
-      "tizen",
-      "browser"
+      "ios"
     ]
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/apache/cordova-plugin-device-motion"
+    "url": "https://github.com/distinctdan/cordova-plugin-device-motion"
   },
   "bugs": {
-    "url": "https://issues.apache.org/jira/browse/CB"
+    "url": "https://github.com/distinctdan/cordova-plugin-device-motion/issues"
   },
   "keywords": [
     "cordova",
     "device",
     "motion",
     "ecosystem:cordova",
-    "cordova-firefoxos",
     "cordova-android",
-    "cordova-amazon-fireos",
-    "cordova-ubuntu",
-    "cordova-ios",
-    "cordova-blackberry10",
-    "cordova-wp7",
-    "cordova-wp8",
-    "cordova-windows8",
-    "cordova-windows",
-    "cordova-tizen",
-    "cordova-browser"
+    "cordova-ios"
   ],
   "scripts": {
     "test": "npm run jshint",

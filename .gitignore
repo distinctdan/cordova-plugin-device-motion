@@ -8,6 +8,7 @@ Thumbs.db
 
 *.bak
 *.cache
+.idea
 *.log
 *.swp
 *.user
@@ -20,4 +21,3 @@ node_modules
 
 
 
- 
