@@ -33,13 +33,15 @@
 <!--        <clobbers target="Acceleration" />-->
 <!--    </js-module>-->
 
+    <engines>
+        <engine name="cordova" version=">=9" />
+        <engine name="cordova-android" version=">=8" />
+        <engine name="cordova-ios" version=">=5" />
+    </engines>
+
     <js-module src="www/accelerometer.js" name="accelerometer">
         <clobbers target="navigator.accelerometer" />
     </js-module>
-
-    <info>
-        This is an update of the device motion plugin now that apple requires a user prompt to get motion data in iOS 13.
-    </info>
 
 <!--    &lt;!&ndash; firefoxos &ndash;&gt;-->
 <!--    <platform name="firefoxos">-->
@@ -56,10 +58,10 @@
 
     <!-- android -->
     <platform name="android">
-
         <config-file target="res/xml/config.xml" parent="/*">
             <feature name="Accelerometer">
                 <param name="android-package" value="org.apache.cordova.devicemotion.AccelListener"/>
+                <param name="onload" value="true" />
             </feature>
         </config-file>
 
@@ -88,10 +90,10 @@
 
     <!-- ios -->
     <platform name="ios">
-
-        <config-file target="config.xml" parent="/*">
+        <config-file parent="/*" target="config.xml" >
             <feature name="Accelerometer">
                 <param name="ios-package" value="CDVAccelerometer"/>
+                <param name="onload" value="true" />
             </feature>
         </config-file>
 

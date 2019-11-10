@@ -86,3 +86,4 @@ var accelerometer = {
     },
 };
 module.exports = accelerometer;
+
