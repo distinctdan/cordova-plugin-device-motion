@@ -44,7 +44,7 @@ var accelerometer = {
      */
     watchAcceleration: function (successCallback, errorCallback, options) {
         // Default interval (60fps)
-        var frequency = (options && options.frequency && typeof options.frequency == 'number') ? options.frequency : 1000/60;
+        var frequency = (options && options.frequency && typeof options.frequency == 'number') ? options.frequency : 1000/30;
     
         var newListener = {
             success: successCallback,

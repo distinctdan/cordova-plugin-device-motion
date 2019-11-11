@@ -18,15 +18,12 @@
 */
 package org.apache.cordova.devicemotion;
 
-import java.util.List;
-
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import android.content.Context;
@@ -34,48 +31,27 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.util.Log;
 
-import android.os.Handler;
-import android.os.Looper;
-
-/**
- * This class listens to the accelerometer sensor and stores the latest
- * acceleration values x,y,z.
- */
 public class AccelListener extends CordovaPlugin implements SensorEventListener {
+    // From the docs: The desired delay between two consecutive events in microseconds.
+    // This is only a hint to the system. Events may be received faster or slower
+    // than the specified rate. Usually events are received faster.
+    // There are 1000000 microseconds in 1 second.
+    private int delayMicroseconds = (int) 1000000/60;
 
-    public static int STOPPED = 0;
-    public static int STARTING = 1;
-    public static int RUNNING = 2;
-    public static int ERROR_FAILED_TO_START = 3;
+    // Keep track of whether we're running. Note that this is separate from whether
+    // we're actually getting events, because if the app pauses, we temporarily unregister
+    // from getting events in order to save battery life.
+    private boolean isRunning = false;
 
-    private float x,y,z;                                // most recent acceleration values
-    private long timestamp;                         // time of most recent value
-    private int status;                                 // status of listener
-    private int accuracy = SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM;
+    private CallbackContext jsCallbackContext;
+    private SensorManager sensorManager;
+    private Sensor mAccelSensor;
 
-    private SensorManager sensorManager;    // Sensor manager
-    private Sensor mSensor;                           // Acceleration sensor returned by sensor manager
-
-    private CallbackContext callbackContext;              // Keeps track of the JS callback context.
-
-    private Handler mainHandler=null;
-    private Runnable mainRunnable =new Runnable() {
-        public void run() {
-            AccelListener.this.timeout();
-        }
-    };
-
-    /**
-     * Create an accelerometer listener.
-     */
     public AccelListener() {
-        this.x = 0;
-        this.y = 0;
-        this.z = 0;
-        this.timestamp = 0;
-        this.setStatus(AccelListener.STOPPED);
-     }
+
+    }
 
     /**
      * Sets the context of the Command. This can then be used to do things like
@@ -88,224 +64,165 @@ public class AccelListener extends CordovaPlugin implements SensorEventListener 
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
         super.initialize(cordova, webView);
         this.sensorManager = (SensorManager) cordova.getActivity().getSystemService(Context.SENSOR_SERVICE);
+        this.mAccelSensor = this.sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
     }
 
     /**
      * Executes the request.
      *
-     * @param action        The action to execute.
-     * @param args          The exec() arguments.
-     * @param callbackId    The callback id used when calling back into JavaScript.
-     * @return              Whether the action was valid.
+     * @param action          The action to execute.
+     * @param args            The exec() arguments.
+     * @param callbackContext The callback context used when calling back into JavaScript.
+     * @return                Whether the action was valid.
      */
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) {
-        if (action.equals("start")) {
-            this.callbackContext = callbackContext;
-            if (this.status != AccelListener.RUNNING) {
-                // If not running, then this is an async call, so don't worry about waiting
-                // We drop the callback onto our stack, call start, and let start and the sensor callback fire off the callback down the road
-                this.start();
+        try {
+            this.jsCallbackContext = callbackContext;
+            if (action.equals("start")) {
+                // We expect to be passed a delay in milliseconds, so convert to microseconds.
+                this.delayMicroseconds = args.getInt(0) * 1000;
+
+                // If already running, re-register the listener so that we use the new delay.
+                if (this.isRunning) this.unregisterListener();
+
+                boolean success = this.registerListener();
+                if (success) {
+                    this.isRunning = true;
+
+                    // Send no result so that it saves the callback info, so that we can send updates later.
+                    PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT, "");
+                    result.setKeepCallback(true);
+                    callbackContext.sendPluginResult(result);
+                } else {
+                    this.isRunning = false;
+                    // registerListener sends a fail result on error, so nothing to do here.
+                    // The error handling code is in registerListener, so that we send the same error
+                    // in the onResume method if it errors.
+                }
+                return true;
             }
-        }
-        else if (action.equals("stop")) {
-            if (this.status == AccelListener.RUNNING) {
-                this.stop();
+            else if (action.equals("stop")) {
+                this.unregisterListener();
+                this.isRunning = false;
+
+                PluginResult result = new PluginResult(PluginResult.Status.OK, "");
+                callbackContext.sendPluginResult(result);
+                return true;
             }
-        } else {
-          // Unsupported action
+            else {
+                this.fail("Invalid action: " + action);
+                return false;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("execute: " + e.getMessage());
             return false;
         }
-
-        PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT, "");
-        result.setKeepCallback(true);
-        callbackContext.sendPluginResult(result);
-        return true;
     }
 
-    /**
-     * Called by AccelBroker when listener is to be shut down.
-     * Stop listener.
-     */
     public void onDestroy() {
-        this.stop();
+        try {
+            if (this.isRunning) this.unregisterListener();
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("onDestroy: " + e.getMessage());
+        }
+    }
+
+    // On pause, we're supposed to unregister any sensors we're using. If we don't,
+    // they'll continue to run while the app is closed and will drain battery life.
+    @Override
+    public void onPause(boolean multitasking) {
+        try {
+            if (this.isRunning) this.unregisterListener();
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("onPause: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void onResume(boolean multitasking) {
+        try {
+            if (this.isRunning) this.registerListener();
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("onResume: " + e.getMessage());
+        }
+    }
+
+    // Called when the webview navigates or reloads.
+    @Override
+    public void onReset() {
+        try {
+            this.unregisterListener();
+            this.isRunning = false;
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("onReset: " + e.getMessage());
+        }
+    }
+
+    //--------------------------------------------------------------------------
+    // SENSOR METHODS
+    //--------------------------------------------------------------------------
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // Ignore accuracy because even low accuracy data is better than none.
+        // This shouldn't really be an issue for the accelerometer anyways.
+    }
+
+    public void onSensorChanged(SensorEvent event) {
+        try {
+            // Only look at accelerometer events
+            if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER) return;
+
+            JSONObject json = new JSONObject();
+            json.put("x", event.values[0]);
+            json.put("y", event.values[1]);
+            json.put("z", event.values[2]);
+            json.put("timestamp", System.currentTimeMillis());
+
+            PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+            result.setKeepCallback(true);
+            jsCallbackContext.sendPluginResult(result);
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.fail("onSensorChanged: " + e.getMessage());
+        }
     }
 
     //--------------------------------------------------------------------------
     // LOCAL METHODS
     //--------------------------------------------------------------------------
-    //
-    /**
-     * Start listening for acceleration sensor.
-     *
-     * @return          status of listener
-    */
-    private int start() {
-        // If already starting or running, then restart timeout and return
-        if ((this.status == AccelListener.RUNNING) || (this.status == AccelListener.STARTING)) {
-            startTimeout();
-            return this.status;
-        }
 
-        this.setStatus(AccelListener.STARTING);
-
-        // Get accelerometer from sensor manager
-        List<Sensor> list = this.sensorManager.getSensorList(Sensor.TYPE_ACCELEROMETER);
-
-        // If found, then register as listener
-        if ((list != null) && (list.size() > 0)) {
-          this.mSensor = list.get(0);
-          if (this.sensorManager.registerListener(this, this.mSensor, SensorManager.SENSOR_DELAY_UI)) {
-              this.setStatus(AccelListener.STARTING);
-              // CB-11531: Mark accuracy as 'reliable' - this is complementary to
-              // setting it to 'unreliable' 'stop' method
-              this.accuracy = SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM;
-          } else {
-              this.setStatus(AccelListener.ERROR_FAILED_TO_START);
-              this.fail(AccelListener.ERROR_FAILED_TO_START, "Device sensor returned an error.");
-              return this.status;
-          };
-
+    private boolean registerListener() {
+        // This can be null if the device doesn't have an accelerometer.
+        if (this.mAccelSensor != null) {
+            // This returns false if there's an error
+            boolean success = this.sensorManager.registerListener(this, this.mAccelSensor, delayMicroseconds);
+            if (!success) this.fail("Device sensor returned an error.");
+            return success;
         } else {
-          this.setStatus(AccelListener.ERROR_FAILED_TO_START);
-          this.fail(AccelListener.ERROR_FAILED_TO_START, "No sensors found to register accelerometer listening to.");
-          return this.status;
+            this.fail("No accelerometer found.");
         }
+        return false;
+    }
 
-        startTimeout();
-
-        return this.status;
-    }
-    private void startTimeout() {
-        // Set a timeout callback on the main thread.
-        stopTimeout();
-        mainHandler = new Handler(Looper.getMainLooper());
-        mainHandler.postDelayed(mainRunnable, 2000);
-    }
-    private void stopTimeout() {
-        if(mainHandler!=null){
-            mainHandler.removeCallbacks(mainRunnable);
-        }
-    }
-    /**
-     * Stop listening to acceleration sensor.
-     */
-    private void stop() {
-        stopTimeout();
-        if (this.status != AccelListener.STOPPED) {
+    private void unregisterListener() {
+        // This can be null if the device doesn't have an accelerometer.
+        if (this.mAccelSensor != null) {
             this.sensorManager.unregisterListener(this);
-        }
-        this.setStatus(AccelListener.STOPPED);
-        this.accuracy = SensorManager.SENSOR_STATUS_UNRELIABLE;
-    }
-
-    /**
-     * Returns latest cached position if the sensor hasn't returned newer value.
-     *
-     * Called two seconds after starting the listener.
-     */
-    private void timeout() {
-        if (this.status == AccelListener.STARTING &&
-            this.accuracy >= SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM) {
-            // call win with latest cached position
-            // but first check if cached position is reliable
-            this.timestamp = System.currentTimeMillis();
-            this.win();
-        }
-    }
-
-    /**
-     * Called when the accuracy of the sensor has changed.
-     *
-     * @param sensor
-     * @param accuracy
-     */
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        // Only look at accelerometer events
-        if (sensor.getType() != Sensor.TYPE_ACCELEROMETER) {
-            return;
-        }
-
-        // If not running, then just return
-        if (this.status == AccelListener.STOPPED) {
-            return;
-        }
-        this.accuracy = accuracy;
-    }
-
-    /**
-     * Sensor listener event.
-     *
-     * @param SensorEvent event
-     */
-    public void onSensorChanged(SensorEvent event) {
-        // Only look at accelerometer events
-        if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER) {
-            return;
-        }
-
-        // If not running, then just return
-        if (this.status == AccelListener.STOPPED) {
-            return;
-        }
-        this.setStatus(AccelListener.RUNNING);
-
-        if (this.accuracy >= SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM) {
-
-            // Save time that event was received
-            this.timestamp = System.currentTimeMillis();
-            this.x = event.values[0];
-            this.y = event.values[1];
-            this.z = event.values[2];
-
-            this.win();
-        }
-    }
-
-    /**
-     * Called when the view navigates.
-     */
-    @Override
-    public void onReset() {
-        if (this.status == AccelListener.RUNNING) {
-            this.stop();
         }
     }
 
     // Sends an error back to JS
-    private void fail(int code, String message) {
-        // Error object
-        JSONObject errorObj = new JSONObject();
-        try {
-            errorObj.put("code", code);
-            errorObj.put("message", message);
-        } catch (JSONException e) {
-            e.printStackTrace();
+    private void fail(String message) {
+        Log.e("CordovaPluginDeviceMotion", message);
+        if (jsCallbackContext != null) {
+            PluginResult err = new PluginResult(PluginResult.Status.ERROR,
+                    "CordovaPluginDeviceMotion error: " + message);
+            err.setKeepCallback(true);
+            jsCallbackContext.sendPluginResult(err);
         }
-        PluginResult err = new PluginResult(PluginResult.Status.ERROR, errorObj);
-        err.setKeepCallback(true);
-        callbackContext.sendPluginResult(err);
-    }
-
-    private void win() {
-        // Success return object
-        PluginResult result = new PluginResult(PluginResult.Status.OK, this.getAccelerationJSON());
-        result.setKeepCallback(true);
-        callbackContext.sendPluginResult(result);
-    }
-
-    private void setStatus(int status) {
-        this.status = status;
-    }
-    private JSONObject getAccelerationJSON() {
-        JSONObject r = new JSONObject();
-        try {
-            r.put("x", this.x);
-            r.put("y", this.y);
-            r.put("z", this.z);
-            r.put("timestamp", this.timestamp);
-        } catch (JSONException e) {
-            e.printStackTrace();
-        }
-        return r;
     }
 }
