@@ -38,7 +38,7 @@ public class AccelListener extends CordovaPlugin implements SensorEventListener 
     // This is only a hint to the system. Events may be received faster or slower
     // than the specified rate. Usually events are received faster.
     // There are 1000000 microseconds in 1 second.
-    private int delayMicroseconds = (int) 1000000/60;
+    private int delayMicroseconds = (int) 1000000; // This value is never used - gets overwritten by js default.
 
     // Keep track of whether we're running. Note that this is separate from whether
     // we're actually getting events, because if the app pauses, we temporarily unregister

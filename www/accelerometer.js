@@ -43,7 +43,6 @@ var accelerometer = {
      * @return {Function} unregister        A function that can be called to unregister the success callback from getting called (OPTIONAL)
      */
     watchAcceleration: function (successCallback, errorCallback, options) {
-        // Default interval (60fps)
         var frequency = (options && options.frequency && typeof options.frequency == 'number') ? options.frequency : 1000/30;
     
         var newListener = {
@@ -59,7 +58,9 @@ var accelerometer = {
             accelerometer.timestamp = accel.timestamp;
             
             for (var i = 0; i < listeners.length; i++) {
-                listeners[i].success(accel);
+                if (listeners[i].success) {
+                    listeners[i].success(accel);
+                }
             }
         }, function (error) {
             for (var i = 0; i < listeners.length; i++) {
@@ -71,7 +72,14 @@ var accelerometer = {
         
         // Unregister function - If the last callback is unregistered, call the native "stop" method.
         // The caller can optionally pass success/error callbacks to get any native errors from calling "stop".
+        let hasRunCancel = false;
         return function(unregisterSuccessCallback, unregisterErrorCallback) {
+            if (hasRunCancel) {
+                console.log('Accelerometer: unregister was called twice, doing nothing.');
+                return;
+            }
+            hasRunCancel = true;
+            
             var i = listeners.indexOf(newListener);
             if (i !== -1) {
                 listeners.splice(i, 1);

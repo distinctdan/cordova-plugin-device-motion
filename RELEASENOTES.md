@@ -20,6 +20,10 @@
 -->
 # Release Notes
 
+### 3.0.0 (Nov 16, 2019)
+* Rewrote plugin: new simplified API
+* Made interval frequency param actually matter (previously it did not affect the rate the native accel events were fired).
+
 ### 2.0.1 (April 13, 2018)
 * [CB-14001](https://issues.apache.org/jira/browse/CB-14001): Fix `cordovaDependencies` to allow plugin install
 
