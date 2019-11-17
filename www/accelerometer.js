@@ -88,7 +88,7 @@ var accelerometer = {
             if (listeners.length === 0) {
                 exec(unregisterSuccessCallback, unregisterErrorCallback, "Accelerometer", "stop", []);
             } else {
-                unregisterSuccessCallback();
+                if (unregisterSuccessCallback) unregisterSuccessCallback();
             }
         };
     },

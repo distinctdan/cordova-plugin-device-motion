@@ -26,19 +26,25 @@
 
 @implementation CDVAccelerometer
 
+NSString* callbackId;
+bool hasAddedAccelCallback = false;
+bool isStarted = false;
+double updateIntervalMs = 1000; // This value is overwritten by the js default
+
 
 // g constant: -9.81 m/s^2
 #define kGravitationalConstant -9.81
 
-- (CDVAccelerometer*)init
+- (void)pluginInitialize
 {
-    self = [super init];
-    return self;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onPause) name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onResume) name:UIApplicationWillEnterForegroundNotification object:nil];
 }
 
 - (void)dealloc
 {
     [self stop:nil];
+    // Notifications are unbound in CDVPlugin
 }
 
 - (void)start:(CDVInvokedUrlCommand*)command
@@ -55,23 +61,10 @@
                 [self stop:nil];
             }
 
-            // Assign the update interval to the motion manager and start updates
-            float intervalMs = [[command.arguments objectAtIndex:0] floatValue];
-            [self.motionManager setAccelerometerUpdateInterval:intervalMs/1000]; // expected in seconds
-
-            [self.motionManager startAccelerometerUpdatesToQueue:[NSOperationQueue mainQueue] withHandler:^(CMAccelerometerData *accelerometerData, NSError *error) {
-
-                // Create an acceleration object
-                NSMutableDictionary* accelProps = [NSMutableDictionary dictionaryWithCapacity:4];
-                accelProps[@"x"] = [NSNumber numberWithDouble:accelerometerData.acceleration.x * kGravitationalConstant];
-                accelProps[@"y"] = [NSNumber numberWithDouble:accelerometerData.acceleration.y * kGravitationalConstant];
-                accelProps[@"z"] = [NSNumber numberWithDouble:accelerometerData.acceleration.z * kGravitationalConstant];
-                accelProps[@"timestamp"] = [NSNumber numberWithDouble:([[NSDate date] timeIntervalSince1970] * 1000)];
-
-                CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:accelProps];
-                [result setKeepCallbackAsBool:YES];
-                [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-            }];
+            callbackId = command.callbackId;
+            isStarted = true;
+            updateIntervalMs = [[command.arguments objectAtIndex:0] floatValue];
+            [self _startAccelUpdates];
         }
         else {
 
@@ -81,16 +74,28 @@
             [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }
     } @catch (NSException *exception) {
-       NSLog(@"CDVAccelerometer-start ERROR: %@", exception.reason);
-
-       CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:exception.reason];
-       [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+       [self onErrorWithMethodName:@"start" withException:exception];
    }
 }
 
-- (void)onReset
+- (void)_startAccelUpdates
 {
-    [self stop:nil];
+    hasAddedAccelCallback = true;
+
+    [self.motionManager setAccelerometerUpdateInterval:updateIntervalMs/1000]; // expected in seconds
+    [self.motionManager startAccelerometerUpdatesToQueue:[NSOperationQueue mainQueue] withHandler:^(CMAccelerometerData *accelerometerData, NSError *error) {
+
+        // Create an acceleration object
+        NSMutableDictionary* accelProps = [NSMutableDictionary dictionaryWithCapacity:4];
+        accelProps[@"x"] = [NSNumber numberWithDouble:accelerometerData.acceleration.x * kGravitationalConstant];
+        accelProps[@"y"] = [NSNumber numberWithDouble:accelerometerData.acceleration.y * kGravitationalConstant];
+        accelProps[@"z"] = [NSNumber numberWithDouble:accelerometerData.acceleration.z * kGravitationalConstant];
+        accelProps[@"timestamp"] = [NSNumber numberWithDouble:([[NSDate date] timeIntervalSince1970] * 1000)];
+
+        CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:accelProps];
+        [result setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:result callbackId:callbackId];
+    }];
 }
 
 - (void)stop:(CDVInvokedUrlCommand*)command
@@ -100,17 +105,61 @@
             [self.motionManager stopAccelerometerUpdates];
         }
 
+        callbackId = nil;
+        isStarted = false;
+        hasAddedAccelCallback = false;
+
         if (command) {
             CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
             [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }
     } @catch (NSException *exception) {
-        NSLog(@"CDVAccelerometer-stop ERROR: %@", exception.reason);
+        [self onErrorWithMethodName:@"stop" withException:exception];
+    }
+}
 
-        if (command) {
-            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:exception.reason];
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+- (void)onReset
+{
+    @try {
+        [self stop:nil];
+    } @catch (NSException *exception) {
+        [self onErrorWithMethodName:@"onReset" withException:exception];
+    }
+}
+
+- (void)onPause
+{
+    @try {
+        // Stop getting motion updates to avoid wasting battery while we're in the background.
+        if (self.motionManager && self.motionManager.isAccelerometerActive) {
+            [self.motionManager stopAccelerometerUpdates];
+            hasAddedAccelCallback = false;
         }
+    } @catch (NSException *exception) {
+        [self onErrorWithMethodName:@"onPause" withException:exception];
+    }
+}
+
+- (void)onResume
+{
+    @try {
+        // Restart watching the accelerometer if we were already started.
+        if (isStarted && self.motionManager && !hasAddedAccelCallback) {
+            [self _startAccelUpdates];
+        }
+    } @catch (NSException *exception) {
+        [self onErrorWithMethodName:@"onResume" withException:exception];
+    }
+}
+
+- (void) onErrorWithMethodName:(NSString*)methodName withException:(NSException*)e {
+    NSString* err = [NSString stringWithFormat:@"CDVAccelerometer - %@ ERROR: %@ - %@", methodName, e.name, e.reason];
+    NSLog(@"%@", err);
+
+    if (callbackId) {
+        CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:err];
+        [result setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:result callbackId:callbackId];
     }
 }
 

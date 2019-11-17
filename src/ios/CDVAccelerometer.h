@@ -25,9 +25,11 @@
 
 }
 
-- (CDVAccelerometer*)init;
+- (void)pluginInitialize;
 
 - (void)start:(CDVInvokedUrlCommand*)command;
 - (void)stop:(CDVInvokedUrlCommand*)command;
+- (void)onPause;
+- (void)onResume;
 
 @end
